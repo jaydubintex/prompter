@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prompter</title>
+<style>
+  :root{
+    --bg:#0a0a0a; --panel:#141413; --fg:#f2f2ef; --mute:#8a8a85; --faint:#3a3a37;
+    --line:#242422; --accent:#ffd34d; --ok:#5fd38a; --err:#ff6b5e;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--bg);color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  button,input,textarea,select{font:inherit;color:inherit}
+  button{cursor:pointer;background:none;border:0}
+  .hidden{display:none !important}
+
+  /* ---------- Setup ---------- */
+  #setup{min-height:100%;display:grid;grid-template-columns:minmax(0,1fr) 320px;}
+  #setup .write{display:flex;flex-direction:column;padding:40px 40px 32px;min-width:0}
+  .brand{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute);margin-bottom:20px}
+  textarea#script{flex:1;min-height:320px;width:100%;resize:none;background:transparent;border:0;outline:0;
+    font-size:20px;line-height:1.55;color:var(--fg)}
+  textarea#script::placeholder{color:var(--faint)}
+  .meta{font-size:13px;color:var(--mute);padding-top:16px;border-top:1px solid var(--line);margin-top:16px;
+    display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  #setup aside{background:var(--panel);border-left:1px solid var(--line);padding:40px 28px 32px;
+    display:flex;flex-direction:column;gap:28px}
+  .field label{display:flex;justify-content:space-between;font-size:13px;color:var(--mute);margin-bottom:10px}
+  .field label b{color:var(--fg);font-weight:500;font-variant-numeric:tabular-nums}
+  input[type=range]{width:100%;accent-color:var(--fg)}
+  .seg{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--faint);border-radius:8px;overflow:hidden}
+  .seg button{padding:10px 8px;font-size:14px;color:var(--mute)}
+  .seg button[aria-pressed=true]{background:var(--fg);color:var(--bg)}
+  .seg button:disabled{opacity:.35;cursor:not-allowed}
+  .toggle{display:flex;justify-content:space-between;align-items:center;font-size:14px}
+  .toggle input{width:18px;height:18px;accent-color:var(--fg)}
+  .note{font-size:12px;line-height:1.5;color:var(--mute)}
+  .note.err{color:var(--err)}
+  .start{margin-top:auto;background:var(--fg);color:var(--bg);border-radius:10px;padding:14px;font-size:16px;font-weight:600}
+  .start:disabled{opacity:.3;cursor:not-allowed}
+  .keys{font-size:12px;color:var(--mute);line-height:1.8}
+  kbd{font-family:inherit;font-size:11px;border:1px solid var(--faint);border-radius:4px;padding:1px 5px;color:var(--fg)}
+
+  @media (max-width:760px){
+    #setup{grid-template-columns:1fr}
+    #setup .write{padding:24px 20px 20px}
+    textarea#script{min-height:42vh;font-size:18px}
+    #setup aside{border-left:0;border-top:1px solid var(--line);padding:24px 20px 28px}
+    .keys{display:none}
+  }
+
+  /* ---------- Prompter ---------- */
+  #prompter{position:fixed;inset:0;background:#000;overflow:hidden}
+  #stage{position:absolute;inset:0;overflow:hidden}
+  #stage.mirror{transform:scaleX(-1)}
+  #content{position:relative;margin:0 auto;will-change:transform;
+    font-weight:600;line-height:1.38;letter-spacing:-.005em;
+    overflow-wrap:normal;word-break:normal;hyphens:none}
+  #content p{margin-bottom:.9em}
+  #content .w{transition:color .25s ease;cursor:pointer;border-radius:.12em}
+  #content .w.done{color:#5d5d59}
+  #content .w.now{color:var(--accent)}
+  #marker{position:absolute;left:0;right:0;height:0;pointer-events:none}
+  #marker::before,#marker::after{content:"";position:absolute;top:-9px;border:9px solid transparent}
+  #marker::before{left:8px;border-left:12px solid var(--accent)}
+  #marker::after{right:8px;border-right:12px solid var(--accent)}
+  #fadeT,#fadeB{position:absolute;left:0;right:0;pointer-events:none}
+  #fadeT{top:0;height:14%;background:linear-gradient(#000,transparent)}
+  #fadeB{bottom:0;height:14%;background:linear-gradient(transparent,#000)}
+
+  #bar{position:absolute;left:50%;bottom:20px;transform:translateX(-50%);display:flex;align-items:center;gap:4px;
+    background:rgba(24,24,22,.92);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+    border:1px solid #2e2e2b;border-radius:12px;padding:6px;transition:opacity .3s ease;max-width:calc(100% - 24px)}
+  #bar.idle{opacity:0;pointer-events:none}
+  #bar button{height:36px;min-width:36px;padding:0 12px;border-radius:8px;font-size:14px;color:var(--fg);white-space:nowrap}
+  #bar button:hover{background:#2b2b28}
+  #bar .sep{width:1px;height:20px;background:#34342f;margin:0 4px}
+  #go{font-weight:600}
+  #go .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--mute);margin-right:8px;vertical-align:1px}
+  #go.on .dot{background:var(--ok);box-shadow:0 0 0 0 rgba(95,211,138,.6);animation:pulse 1.6s infinite}
+  @keyframes pulse{70%{box-shadow:0 0 0 7px rgba(95,211,138,0)}100%{box-shadow:0 0 0 0 rgba(95,211,138,0)}}
+  #heard{position:absolute;left:0;right:0;top:14px;text-align:center;font-size:13px;color:#77776f;
+    pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 20px;transition:opacity .3s}
+  #heard.err{color:var(--err)}
+  #sizeLabel{font-variant-numeric:tabular-nums;font-size:13px;color:var(--mute);min-width:34px;text-align:center}
+
+  @media (max-width:560px){
+    #bar{bottom:12px;gap:0;padding:4px}
+    #bar button{padding:0 9px;font-size:13px}
+    #bar .opt{display:none}
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ SETUP ============ -->
+<main id="setup">
+  <section class="write">
+    <div class="brand">Prompter</div>
+    <textarea id="script" spellcheck="true" placeholder="Paste your script here."></textarea>
+    <div class="meta">
+      <span id="count">0 words</span>
+      <span id="duration">about 0 min at a speaking pace</span>
+    </div>
+  </section>
+
+  <aside>
+    <div class="field">
+      <label>Scroll</label>
+      <div class="seg" role="group">
+        <button id="modeVoice" aria-pressed="true">Follow my voice</button>
+        <button id="modeAuto" aria-pressed="false">Steady speed</button>
+      </div>
+      <p id="voiceNote" class="note" style="margin-top:10px">Scrolls as you speak and holds when you pause. Chrome will ask for your microphone.</p>
+    </div>
+
+    <div class="field" id="speedField">
+      <label>Speed <b id="speedVal"></b></label>
+      <input id="speed" type="range" min="10" max="200" step="5">
+    </div>
+
+    <div class="field">
+      <label>Font size <b id="fontVal"></b></label>
+      <input id="font" type="range" min="24" max="140" step="2">
+    </div>
+
+    <div class="field">
+      <label>Text width <b id="widthVal"></b></label>
+      <input id="width" type="range" min="40" max="100" step="2">
+    </div>
+
+    <div class="field">
+      <label>Reading line <b id="lineVal"></b></label>
+      <input id="line" type="range" min="10" max="70" step="1">
+      <p class="note" style="margin-top:10px">How far down the screen the line you're reading sits. Keep it high to stay near your camera.</p>
+    </div>
+
+    <div class="toggle"><span>Mirror text</span><input id="mirror" type="checkbox"></div>
+
+    <div class="keys">
+      <kbd>Space</kbd> start / pause &nbsp; <kbd>↑</kbd><kbd>↓</kbd> nudge<br>
+      <kbd>+</kbd><kbd>−</kbd> font size &nbsp; <kbd>Esc</kbd> back to edit<br>
+      Click any word to jump there.
+    </div>
+
+    <button class="start" id="start" disabled>Open prompter</button>
+  </aside>
+</main>
+
+<!-- ============ PROMPTER ============ -->
+<div id="prompter" class="hidden">
+  <div id="stage">
+    <div id="content"></div>
+  </div>
+  <div id="fadeT"></div><div id="fadeB"></div>
+  <div id="marker"></div>
+  <div id="heard"></div>
+  <div id="bar">
+    <button id="back" title="Edit script (Esc)">Edit</button>
+    <span class="sep"></span>
+    <button id="go"><span class="dot"></span><span id="goLabel">Start</span></button>
+    <button id="top" title="Back to the top">Restart</button>
+    <span class="sep opt"></span>
+    <button id="smaller" title="Smaller (−)">A−</button>
+    <span id="sizeLabel" class="opt"></span>
+    <button id="bigger" title="Larger (+)">A+</button>
+    <span class="sep opt"></span>
+    <button id="mirrorBtn" class="opt" title="Mirror">Mirror</button>
+    <button id="fs" class="opt" title="Full screen">Full screen</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  /* ---------- Settings (saved in this browser) ---------- */
+  const defaults = { script:"", mode: SR ? "voice" : "auto", speed:50, font:64, width:80, line:30, mirror:false };
+  let S = { ...defaults };
+  try { Object.assign(S, JSON.parse(localStorage.getItem("prompter.v1") || "{}")); } catch(e){}
+  if (!SR) S.mode = "auto";
+  const save = () => { try { localStorage.setItem("prompter.v1", JSON.stringify(S)); } catch(e){} };
+
+  /* ---------- Setup view ---------- */
+  const ta = $("script");
+  ta.value = S.script;
+
+  function updateMeta(){
+    const n = (ta.value.trim().match(/\S+/g) || []).length;
+    $("count").textContent = n === 1 ? "1 word" : n.toLocaleString() + " words";
+    const mins = n / 140;
+    $("duration").textContent = n ? (mins < 1 ? "under a minute" : "about " + Math.round(mins) + " min") + " at a speaking pace" : "";
+    $("start").disabled = n === 0;
+  }
+  ta.addEventListener("input", () => { S.script = ta.value; save(); updateMeta(); });
+
+  const sliders = { font:"px", width:"%", line:"%", speed:"" };
+  for (const k in sliders){
+    const el = $(k);
+    el.value = S[k];
+    const show = () => $(k+"Val").textContent = k === "speed" ? speedLabel(S.speed) : S[k] + sliders[k];
+    el.addEventListener("input", () => { S[k] = +el.value; save(); show(); applyLayout(); });
+    show();
+  }
+  function speedLabel(v){ return v < 35 ? "Slow" : v < 80 ? "Medium" : v < 130 ? "Fast" : "Very fast"; }
+
+  $("mirror").checked = S.mirror;
+  $("mirror").addEventListener("change", e => { S.mirror = e.target.checked; save(); applyLayout(); });
+
+  function setMode(m){
+    S.mode = m; save();
+    $("modeVoice").setAttribute("aria-pressed", m === "voice");
+    $("modeAuto").setAttribute("aria-pressed", m === "auto");
+    $("speedField").classList.toggle("hidden", m === "voice");
+  }
+  $("modeVoice").onclick = () => setMode("voice");
+  $("modeAuto").onclick = () => setMode("auto");
+  if (!SR){
+    $("modeVoice").disabled = true;
+    $("voiceNote").textContent = "Voice follow needs Chrome, Edge or Safari. Steady speed works everywhere.";
+    $("voiceNote").classList.add("err");
+  }
+  setMode(S.mode);
+  updateMeta();
+
+  /* ---------- Build the prompter text ---------- */
+  const content = $("content"), stage = $("stage");
+  let words = [];      // normalized words
+  let spans = [];      // matching span elements
+  let cur = 0;         // index of the next word to read
+
+  const norm = w => w.toLowerCase().replace(/[’'`]/g, "").replace(/[^\p{L}\p{N}]+/gu, "");
+
+  function build(){
+    content.innerHTML = "";
+    words = []; spans = [];
+    const paras = S.script.replace(/\r/g, "").split(/\n\s*\n|\n/);
+    for (const para of paras){
+      if (!para.trim()) continue;
+      const p = document.createElement("p");
+      const tokens = para.trim().split(/\s+/);
+      tokens.forEach((t, i) => {
+        const n = norm(t);
+        if (!n){ p.append(t + " "); return; }   // pure punctuation like "—"
+        const s = document.createElement("span");
+        s.className = "w";
+        s.textContent = t;
+        s.dataset.i = spans.length;
+        p.append(s);
+        if (i < tokens.length - 1) p.append(" ");
+        spans.push(s); words.push(n);
+      });
+      content.append(p);
+    }
+    cur = 0; paint(0);
+  }
+
+  content.addEventListener("click", e => {
+    const s = e.target.closest(".w");
+    if (!s) return;
+    setCur(+s.dataset.i);
+    if (S.mode === "auto") offset = targetFor(cur);
+  });
+
+  /* ---------- Layout ---------- */
+  function applyLayout(){
+    content.style.fontSize = S.font + "px";
+    content.style.width = S.width + "%";
+    content.style.paddingTop = (S.line / 100 * innerHeight) + "px";
+    content.style.paddingBottom = innerHeight + "px";
+    stage.classList.toggle("mirror", S.mirror);
+    $("marker").style.top = (S.line / 100 * innerHeight + S.font * 0.69) + "px";
+    $("sizeLabel").textContent = S.font;
+  }
+  addEventListener("resize", applyLayout);
+
+  function targetFor(i){
+    const s = spans[Math.min(i, spans.length - 1)];
+    if (!s) return 0;
+    return s.offsetTop - S.line / 100 * innerHeight;
+  }
+
+  /* ---------- Highlight ---------- */
+  let painted = 0;
+  function paint(n){
+    // words before n are "done"; word n is "now"
+    const lo = Math.min(painted, n), hi = Math.max(painted, n);
+    for (let i = Math.max(0, lo - 1); i <= Math.min(spans.length - 1, hi + 1); i++){
+      spans[i].classList.toggle("done", i < n);
+      spans[i].classList.toggle("now", S.mode === "voice" && i === n);
+    }
+    painted = n;
+  }
+  function setCur(n){
+    n = Math.max(0, Math.min(words.length, n));
+    if (n === cur) return;
+    cur = n; paint(n);
+  }
+
+  /* ---------- Scroll loop ---------- */
+  let offset = 0, running = false, last = performance.now();
+  function frame(t){
+    const dt = Math.min(64, t - last); last = t;
+    if (!$("prompter").classList.contains("hidden")){
+      if (S.mode === "voice"){
+        // ease toward the line that holds the current word; stops when you stop
+        const target = targetFor(cur);
+        offset += (target - offset) * (1 - Math.exp(-dt / 220));
+      } else {
+        if (running) offset += S.speed * 1.2 * dt / 1000 * (S.font / 64);
+        const max = content.scrollHeight - innerHeight;
+        offset = Math.max(0, Math.min(offset, max));
+        // keep highlight roughly in step with the reading line
+        const readY = offset + S.line / 100 * innerHeight;
+        let i = cur;
+        while (i < spans.length - 1 && spans[i].offsetTop + spans[i].offsetHeight * .5 < readY) i++;
+        while (i > 0 && spans[i - 1].offsetTop + spans[i - 1].offsetHeight * .5 >= readY) i--;
+        setCur(i);
+      }
+      content.style.transform = `translate3d(0,${-offset}px,0)`;
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  /* ---------- Voice following ---------- */
+  const STOP = new Set("a an the and or but of to in on at for is it its im i you we he she they this that be are was were as with so do my your our".split(" "));
+  function lev(a, b){
+    if (Math.abs(a.length - b.length) > 2) return 3;
+    const m = a.length, n = b.length, d = Array.from({length:m + 1}, (_, i) => [i]);
+    for (let j = 1; j <= n; j++) d[0][j] = j;
+    for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++)
+      d[i][j] = Math.min(d[i-1][j] + 1, d[i][j-1] + 1, d[i-1][j-1] + (a[i-1] === b[j-1] ? 0 : 1));
+    return d[m][n];
+  }
+  function sim(a, b){
+    if (!a || !b) return 0;
+    const w = STOP.has(b) ? .5 : 1;
+    if (a === b) return w;
+    const L = Math.min(a.length, b.length);
+    if (L >= 4 && (a.startsWith(b) || b.startsWith(a))) return .8 * w;
+    if (L >= 4){
+      const d = lev(a, b);
+      if (d <= 1) return .8 * w;
+      if (d <= 2 && L >= 7) return .6 * w;
+    }
+    return 0;
+  }
+
+  // Find where the last few spoken words sit in the script, near the current spot.
+  function locate(spoken){
+    if (!spoken.length) return;
+    const lastW = spoken[spoken.length - 1];
+    const from = Math.max(0, cur - 12), to = Math.min(words.length - 1, cur + 40);
+    let best = -1, bestScore = 0;
+    for (let j = from; j <= to; j++){
+      let s = sim(lastW, words[j]);
+      if (!s) continue;
+      let p = j - 1, chain = 1;
+      for (let k = spoken.length - 2; k >= 0 && p >= 0; k--){
+        let hit = -1, hs = 0;
+        for (let q = p; q >= Math.max(0, p - 2); q--){
+          const v = sim(spoken[k], words[q]);
+          if (v > hs){ hs = v; hit = q; }
+        }
+        if (hit >= 0){ s += hs; p = hit - 1; chain++; }
+      }
+      const ahead = j - cur;
+      s -= Math.max(0, ahead) * 0.025;     // prefer nearby matches
+      if (ahead < -1) s -= 0.6;            // going backwards needs strong evidence
+      if (s > bestScore){ bestScore = s; best = j; }
+    }
+    if (best < 0) return;
+    const ahead = best - cur;
+    const single = words[best].length >= 5 && !STOP.has(words[best]) && ahead >= -1 && ahead <= 4;
+    const ok = ahead < -1 ? bestScore >= 2.6 : (bestScore >= 1.5 || (single && bestScore >= .75));
+    if (ok) setCur(best + 1);
+  }
+
+  let rec = null, listening = false, wantListen = false, restartTimer = null;
+  function startListening(){
+    if (!SR) return;
+    wantListen = true;
+    if (listening) return;
+    rec = new SR();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = navigator.language || "en-US";
+    rec.onstart = () => { listening = true; status(""); updateGo(); };
+    rec.onresult = e => {
+      // Use the words from the newest results only (recent context)
+      let text = "";
+      for (let i = Math.max(0, e.results.length - 3); i < e.results.length; i++) text += " " + e.results[i][0].transcript;
+      const spoken = text.split(/\s+/).map(norm).filter(Boolean).slice(-7);
+      status(spoken.slice(-6).join(" "));
+      locate(spoken);
+    };
+    rec.onerror = e => {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed"){
+        wantListen = false;
+        status("Microphone blocked. Allow it in the address bar, then press Start.", true);
+      } else if (e.error === "audio-capture"){
+        wantListen = false;
+        status("No microphone found.", true);
+      } else if (e.error === "network"){
+        status("Speech service unreachable. Check your connection.", true);
+      }
+    };
+    rec.onend = () => {
+      listening = false;
+      // Chrome ends sessions on its own every so often; quietly restart
+      if (wantListen){ clearTimeout(restartTimer); restartTimer = setTimeout(() => { try { rec.start(); } catch(e){} }, 150); }
+      updateGo();
+    };
+    try { rec.start(); } catch(e){}
+    updateGo();
+  }
+  function stopListening(){
+    wantListen = false;
+    clearTimeout(restartTimer);
+    if (rec){ try { rec.abort(); } catch(e){} }
+    listening = false; updateGo(); status("");
+  }
+
+  let heardTimer;
+  function status(msg, err){
+    const h = $("heard");
+    h.textContent = msg; h.classList.toggle("err", !!err);
+    h.style.opacity = msg ? 1 : 0;
+    clearTimeout(heardTimer);
+    if (msg && !err) heardTimer = setTimeout(() => h.style.opacity = 0, 2500);
+  }
+
+  /* ---------- Controls ---------- */
+  function isOn(){ return S.mode === "voice" ? wantListen : running; }
+  function updateGo(){
+    const on = isOn();
+    $("go").classList.toggle("on", on);
+    $("goLabel").textContent = on ? (S.mode === "voice" ? "Listening" : "Pause") : (S.mode === "voice" ? "Start listening" : "Start");
+  }
+  function toggle(){
+    if (S.mode === "voice"){ wantListen ? stopListening() : startListening(); }
+    else { running = !running; updateGo(); }
+  }
+  $("go").onclick = toggle;
+  $("top").onclick = () => { setCur(0); cur = 0; paint(0); offset = 0; };
+  const resize = d => { S.font = Math.max(24, Math.min(140, S.font + d)); $("font").value = S.font; $("fontVal").textContent = S.font + "px"; save(); applyLayout(); };
+  $("smaller").onclick = () => resize(-4);
+  $("bigger").onclick = () => resize(4);
+  $("mirrorBtn").onclick = () => { S.mirror = !S.mirror; $("mirror").checked = S.mirror; save(); applyLayout(); };
+  $("fs").onclick = () => {
+    try { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); } catch(e){}
+  };
+
+  function open(){
+    $("setup").classList.add("hidden");
+    $("prompter").classList.remove("hidden");
+    build(); applyLayout();
+    offset = 0; running = false; updateGo(); wake();
+    if (S.mode === "voice") startListening();
+  }
+  function close(){
+    stopListening(); running = false;
+    $("prompter").classList.add("hidden");
+    $("setup").classList.remove("hidden");
+    if (document.fullscreenElement) try { document.exitFullscreen(); } catch(e){}
+    ta.focus();
+  }
+  $("start").onclick = open;
+  $("back").onclick = close;
+
+  // Toolbar fades when the mouse is still
+  let idleT;
+  function wake(){
+    $("bar").classList.remove("idle");
+    clearTimeout(idleT);
+    idleT = setTimeout(() => { if (isOn()) $("bar").classList.add("idle"); }, 2500);
+  }
+  ["mousemove", "touchstart"].forEach(ev => $("prompter").addEventListener(ev, wake, {passive:true}));
+
+  addEventListener("keydown", e => {
+    if ($("prompter").classList.contains("hidden")){
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !$("start").disabled) open();
+      return;
+    }
+    const k = e.key;
+    if (k === " "){ e.preventDefault(); toggle(); wake(); }
+    else if (k === "Escape" && !document.fullscreenElement) close();
+    else if (k === "ArrowDown" || k === "ArrowUp"){
+      e.preventDefault();
+      const dir = k === "ArrowDown" ? 1 : -1;
+      if (S.mode === "voice") setCur(cur + dir * 6);
+      else offset += dir * S.font * 1.38;
+    }
+    else if (k === "+" || k === "=") resize(4);
+    else if (k === "-" || k === "_") resize(-4);
+  });
+})();
+</script>
+</body>
+</html>
