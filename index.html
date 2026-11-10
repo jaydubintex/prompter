@@ -382,15 +382,40 @@
   }
 
   let rec = null, listening = false, wantListen = false, restartTimer = null;
-  function startListening(){
+  let micStream = null, startedAt = 0, quickEnds = 0;
+
+  // Open the microphone once and hold it for the whole prompter session.
+  // Chrome then treats the permission as in use, so recognition restarts never re-prompt.
+  async function ensureMic(){
+    if (micStream && micStream.active) return true;
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      return true;
+    } catch(e){
+      status("Microphone blocked. Click the icon at the left of the address bar, set Microphone to Allow, then press Start.", true);
+      return false;
+    }
+  }
+  function releaseMic(){
+    if (micStream){ micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+  }
+
+  async function startListening(){
     if (!SR) return;
-    wantListen = true;
+    wantListen = true; updateGo();
     if (listening) return;
+    if (!(await ensureMic())){ wantListen = false; updateGo(); return; }
+    if (!wantListen) return;
+    if (!rec) createRecognizer();
+    try { rec.start(); } catch(e){}
+  }
+
+  function createRecognizer(){
     rec = new SR();
     rec.continuous = true;
     rec.interimResults = true;
     rec.lang = navigator.language || "en-US";
-    rec.onstart = () => { listening = true; status(""); updateGo(); };
+    rec.onstart = () => { listening = true; startedAt = performance.now(); status(""); updateGo(); };
     rec.onresult = e => {
       // Use the words from the newest results only (recent context)
       let text = "";
@@ -412,12 +437,19 @@
     };
     rec.onend = () => {
       listening = false;
-      // Chrome ends sessions on its own every so often; quietly restart
-      if (wantListen){ clearTimeout(restartTimer); restartTimer = setTimeout(() => { try { rec.start(); } catch(e){} }, 150); }
+      // Chrome ends sessions on its own (silence, time limits); quietly restart.
+      // If it keeps ending instantly, stop instead of looping.
+      quickEnds = performance.now() - startedAt < 1500 ? quickEnds + 1 : 0;
+      if (wantListen && quickEnds >= 5){
+        wantListen = false;
+        status("Voice listening keeps stopping. Press Start to try again.", true);
+      }
+      if (wantListen){
+        clearTimeout(restartTimer);
+        restartTimer = setTimeout(() => { if (wantListen) try { rec.start(); } catch(e){} }, 250 + quickEnds * 400);
+      }
       updateGo();
     };
-    try { rec.start(); } catch(e){}
-    updateGo();
   }
   function stopListening(){
     wantListen = false;
@@ -464,7 +496,7 @@
     if (S.mode === "voice") startListening();
   }
   function close(){
-    stopListening(); running = false;
+    stopListening(); releaseMic(); running = false;
     $("prompter").classList.add("hidden");
     $("setup").classList.remove("hidden");
     if (document.fullscreenElement) try { document.exitFullscreen(); } catch(e){}
