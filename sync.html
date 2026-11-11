@@ -315,7 +315,7 @@
   function openVideo(){
     if (!vurl){ status("Choose the video file in Edit first.", true); return; }
     if (vwin && !vwin.closed){ vwin.focus(); return; }
-    vwin = window.open("", "prompter-video", "width=1280,height=760");
+    vwin = window.open("", "prompter-video");
     if (!vwin){ status("Allow pop-ups for this page to open the video.", true); return; }
     vwin.document.write(`<!doctype html><title>Demo video</title><style>html,body{margin:0;height:100%;background:#000}video{width:100%;height:100%;object-fit:contain;display:block}</style><video id="v" muted playsinline></video><script>addEventListener("keydown",e=>{const v=document.getElementById("v");if(e.key===" "){e.preventDefault();v.paused?v.play():v.pause()}if(e.key==="f"){document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen()}if(e.key==="m")v.muted=!v.muted});document.getElementById("v").addEventListener("dblclick",()=>{document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen()});<\/script>`);
     vwin.document.close();
