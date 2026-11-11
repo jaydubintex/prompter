@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prompter · Video sync</title>
+<style>
+  :root{
+    --bg:#0a0a0a; --panel:#141413; --fg:#f2f2ef; --mute:#8a8a85; --faint:#3a3a37;
+    --line:#242422; --accent:#ffd34d; --ok:#5fd38a; --err:#ff6b5e;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--bg);color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  button,input,textarea,select{font:inherit;color:inherit}
+  button{cursor:pointer;background:none;border:0}
+  .hidden{display:none !important}
+
+  /* ---------- Setup ---------- */
+  #setup{min-height:100%;display:grid;grid-template-columns:minmax(0,1fr) 320px;}
+  #setup .write{display:flex;flex-direction:column;padding:40px 40px 32px;min-width:0}
+  .brand{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute);margin-bottom:20px}
+  textarea#script{flex:1;min-height:320px;width:100%;resize:none;background:transparent;border:0;outline:0;
+    font-size:20px;line-height:1.55;color:var(--fg)}
+  textarea#script::placeholder{color:var(--faint)}
+  .meta{font-size:13px;color:var(--mute);padding-top:16px;border-top:1px solid var(--line);margin-top:16px;
+    display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  #setup aside{background:var(--panel);border-left:1px solid var(--line);padding:40px 28px 32px;
+    display:flex;flex-direction:column;gap:28px}
+  .field label{display:flex;justify-content:space-between;font-size:13px;color:var(--mute);margin-bottom:10px}
+  .field label b{color:var(--fg);font-weight:500;font-variant-numeric:tabular-nums}
+  input[type=range]{width:100%;accent-color:var(--fg)}
+  .seg{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--faint);border-radius:8px;overflow:hidden}
+  .seg button{padding:10px 8px;font-size:14px;color:var(--mute)}
+  .seg button[aria-pressed=true]{background:var(--fg);color:var(--bg)}
+  .seg button:disabled{opacity:.35;cursor:not-allowed}
+  .toggle{display:flex;justify-content:space-between;align-items:center;font-size:14px}
+  .toggle input{width:18px;height:18px;accent-color:var(--fg)}
+  .note{font-size:12px;line-height:1.5;color:var(--mute)}
+  .note.err{color:var(--err)}
+  .start{margin-top:auto;background:var(--fg);color:var(--bg);border-radius:10px;padding:14px;font-size:16px;font-weight:600}
+  .start:disabled{opacity:.3;cursor:not-allowed}
+  .keys{font-size:12px;color:var(--mute);line-height:1.8}
+  kbd{font-family:inherit;font-size:11px;border:1px solid var(--faint);border-radius:4px;padding:1px 5px;color:var(--fg)}
+
+  @media (max-width:760px){
+    #setup{grid-template-columns:1fr}
+    #setup .write{padding:24px 20px 20px}
+    textarea#script{min-height:42vh;font-size:18px}
+    #setup aside{border-left:0;border-top:1px solid var(--line);padding:24px 20px 28px}
+    .keys{display:none}
+  }
+
+  /* ---------- Prompter ---------- */
+  #prompter{position:fixed;inset:0;background:#000;overflow:hidden}
+  #stage{position:absolute;inset:0;overflow:hidden}
+  #stage.mirror{transform:scaleX(-1)}
+  #content{position:relative;margin:0 auto;will-change:transform;
+    font-weight:600;line-height:1.38;letter-spacing:-.005em;
+    overflow-wrap:normal;word-break:normal;hyphens:none}
+  #content p{margin-bottom:.9em}
+  #content .w{transition:color .25s ease;cursor:pointer;border-radius:.12em}
+  #content .w.done{color:#5d5d59}
+  #content .w.now{color:var(--accent)}
+  #marker{position:absolute;left:0;right:0;height:0;pointer-events:none}
+  #marker::before,#marker::after{content:"";position:absolute;top:-9px;border:9px solid transparent}
+  #marker::before{left:8px;border-left:12px solid var(--accent)}
+  #marker::after{right:8px;border-right:12px solid var(--accent)}
+  #fadeT,#fadeB{position:absolute;left:0;right:0;pointer-events:none}
+  #fadeT{top:0;height:14%;background:linear-gradient(#000,transparent)}
+  #fadeB{bottom:0;height:14%;background:linear-gradient(transparent,#000)}
+
+  #bar{position:absolute;left:50%;bottom:20px;transform:translateX(-50%);display:flex;align-items:center;gap:4px;
+    background:rgba(24,24,22,.92);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+    border:1px solid #2e2e2b;border-radius:12px;padding:6px;transition:opacity .3s ease;max-width:calc(100% - 24px)}
+  #bar.idle{opacity:0;pointer-events:none}
+  #bar button{height:36px;min-width:36px;padding:0 12px;border-radius:8px;font-size:14px;color:var(--fg);white-space:nowrap}
+  #bar button:hover{background:#2b2b28}
+  #bar .sep{width:1px;height:20px;background:#34342f;margin:0 4px}
+  #go{font-weight:600}
+  #go .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--mute);margin-right:8px;vertical-align:1px}
+  #go.on .dot{background:var(--ok);box-shadow:0 0 0 0 rgba(95,211,138,.6);animation:pulse 1.6s infinite}
+  @keyframes pulse{70%{box-shadow:0 0 0 7px rgba(95,211,138,0)}100%{box-shadow:0 0 0 0 rgba(95,211,138,0)}}
+  #heard{position:absolute;left:0;right:0;top:14px;text-align:center;font-size:13px;color:#77776f;
+    pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 20px;transition:opacity .3s}
+  #heard.err{color:var(--err)}
+  #sizeLabel{font-variant-numeric:tabular-nums;font-size:13px;color:var(--mute);min-width:34px;text-align:center}
+
+  /* video sync */
+  #content .w.vid{color:#5fd3c4;background:rgba(95,211,196,.16);box-shadow:0 .08em 0 #5fd3c4}
+  #content .w.now.vid{color:var(--accent)}
+  #vmark{position:absolute;left:0;width:6px;background:#5fd3c4;border-radius:0 3px 3px 0;pointer-events:none;transition:top .2s ease,opacity .2s}
+  #sync{position:absolute;right:16px;top:12px;font-size:13px;font-weight:600;padding:6px 10px;border-radius:8px;background:rgba(24,24,22,.92);border:1px solid #2e2e2b;color:#77776f;font-variant-numeric:tabular-nums}
+  #sync.ok{color:#5fd38a}#sync.ahead{color:#5fd3c4}#sync.behind{color:var(--accent)}
+  .vfile{font-size:13px;color:var(--mute)}
+  .vfile input{display:block;margin-top:8px;font-size:12px;max-width:100%}
+  @media (max-width:560px){
+    #bar{bottom:12px;gap:0;padding:4px}
+    #bar button{padding:0 9px;font-size:13px}
+    #bar .opt{display:none}
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ SETUP ============ -->
+<main id="setup">
+  <section class="write">
+    <div class="brand">Prompter</div>
+    <textarea id="script" spellcheck="true" placeholder="Paste your script here."></textarea>
+    <div class="meta">
+      <span id="count">0 words</span>
+      <span id="duration">about 0 min at a speaking pace</span>
+    </div>
+  </section>
+
+  <aside>
+    <div class="field">
+      <label>Scroll</label>
+      <div class="seg" role="group">
+        <button id="modeVoice" aria-pressed="true">Follow my voice</button>
+        <button id="modeAuto" aria-pressed="false">Steady speed</button>
+      </div>
+      <p id="voiceNote" class="note" style="margin-top:10px">Scrolls as you speak and holds when you pause. Chrome will ask for your microphone.</p>
+    </div>
+
+    <div class="field" id="speedField">
+      <label>Speed <b id="speedVal"></b></label>
+      <input id="speed" type="range" min="10" max="200" step="5">
+    </div>
+
+    <div class="field">
+      <label>Font size <b id="fontVal"></b></label>
+      <input id="font" type="range" min="24" max="140" step="2">
+    </div>
+
+    <div class="field">
+      <label>Text width <b id="widthVal"></b></label>
+      <input id="width" type="range" min="40" max="100" step="2">
+    </div>
+
+    <div class="field">
+      <label>Reading line <b id="lineVal"></b></label>
+      <input id="line" type="range" min="10" max="70" step="1">
+      <p class="note" style="margin-top:10px">How far down the screen the line you're reading sits. Keep it high to stay near your camera.</p>
+    </div>
+
+    <div class="toggle"><span>Mirror text</span><input id="mirror" type="checkbox"></div>
+
+    <div class="field vfile">
+      <label>Video <b id="vname">None</b></label>
+      Choose the demo video. It plays muted in its own window, and its talk track shows in teal on the script.
+      <input id="vpick" type="file" accept="video/*">
+      <p class="note" style="margin-top:8px">Timing matches demo V10.</p>
+    </div>
+
+    <div class="keys">
+      <kbd>Space</kbd> start / pause &nbsp; <kbd>↑</kbd><kbd>↓</kbd> nudge<br>
+      <kbd>+</kbd><kbd>−</kbd> font size &nbsp; <kbd>Esc</kbd> back to edit<br>
+      <kbd>V</kbd> play / pause video &nbsp; <kbd>S</kbd> sync video to me<br>
+      <kbd>[</kbd><kbd>]</kbd> video back / ahead 5 seconds<br>
+      Click any word to jump there.
+    </div>
+
+    <button class="start" id="start" disabled>Open prompter</button>
+  </aside>
+</main>
+
+<!-- ============ PROMPTER ============ -->
+<div id="prompter" class="hidden">
+  <div id="stage">
+    <div id="content"></div>
+  </div>
+  <div id="fadeT"></div><div id="fadeB"></div>
+  <div id="marker"></div>
+  <div id="heard"></div>
+  <div id="vmark" style="opacity:0"></div>
+  <div id="sync" class="hidden">Video paused</div>
+  <div id="bar">
+    <button id="back" title="Edit script (Esc)">Edit</button>
+    <span class="sep"></span>
+    <button id="go"><span class="dot"></span><span id="goLabel">Start</span></button>
+    <button id="top" title="Back to the top">Restart</button>
+    <span class="sep opt"></span>
+    <button id="smaller" title="Smaller (−)">A−</button>
+    <span id="sizeLabel" class="opt"></span>
+    <button id="bigger" title="Larger (+)">A+</button>
+    <span class="sep opt"></span>
+    <button id="vwin" title="Open the video window">Video</button>
+    <button id="vplay" title="Play or pause the video (V)">Play video</button>
+    <button id="vsync" title="Move the video to where you are (S)">Sync to me</button>
+    <span class="sep opt"></span>
+    <button id="mirrorBtn" class="opt" title="Mirror">Mirror</button>
+    <button id="fs" class="opt" title="Full screen">Full screen</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  /* ---------- Settings (saved in this browser) ---------- */
+  const DEMO = "Opening\n\nAI has transformed engineering. Now the bottleneck is product management.\nProduct managers orchestrate everything from idea to impact, and they do it mostly by hand.\nAgents keep adding more work to that process.\nAnd product managers need help.\n\nThat's where Ogee/loop comes in.\nWe orchestrate the work across people and agents, so product teams can scale.\nWe'll walk through four capabilities.\nLet's hold questions until the end, so you can see how it all connects.\n\nThis is Taylor Chien.\nTaylor is a real person, and this is his real idea.\nThe company is fictional.\nHe's the founder and CEO, and right now he's also the head of product,\nwith a small team helping him out.\nToday they make short AI videos.\nHis idea is to make full AI movies for streamers.\n\nSo he asks a general AI tool about his business idea.\nThe AI tool tells him it's brilliant.\nAnd that's the problem.\nYou get an answer, but you don't know if it's right.\nThe AI tool doesn't follow up, and it doesn't continuously research the answers you need.\n\nCapability 1 | Continuous intelligence\n\nThat's one of the problems Ogee/loop solves. We call it continuous intelligence.\n\nTaylor asks Ogee the same question. Is my business idea a good one?\n\nOgee/loop starts researching the questions that matter to his business. Who buys, what they need, and who he's up against. All of it goes into the Context Hub.\n\nWhen the research is done, Taylor can keep it alive. We keep looking for new sources, so the research stays current.\n\nThe research is in. Taylor's not from the movie business, so this is the first time he's seeing who actually buys.\n\nWhich segments they belong to.\n\nThe jobs they need done, and roughly what they'd pay to get them done.\n\nAnd he finds out several companies are already going after this idea.\n\nFrom there, Ogee/loop suggests product ideas that might be worth pursuing.\n\nNow anyone on his team can ask questions of the same research. Every answer tells you whether it's sourced, inferred or a hypothesis, so you know how much weight to put on it.\n\nHere's one Taylor didn't know. A failed pilot can cost ten to fourteen million dollars, and only about a quarter of pilots get picked up.\n\nDoing the math... and a hit series is worth forty to fifty-six million dollars to a studio.\n\nHe's new to the business, and now he has a pricing anchor.\n\nAnd we keep looking.\nA competitor makes a move.\nA buyer changes how they commission.\nNew research comes out.\nEach one lands in the right place in the Context Hub.\n\nEvery update comes in like a code check-in.\nDevelopers keep their code clean this way, and now the context gets the same care.\nIt's versioned, and someone on the team accepts it before anything changes.\n\nCapability 2 | The living plan\n\nThe second capability is the living plan.\n\nNow Taylor can build his plan. Maybe he already has something in mind. As he sets it up, Ogee/loop pulls in what it already knows: the goal, the opportunity and the product.\n\nOr he can start from an opportunity we found in the research. This one already has evidence behind it.\n\nOgee/loop writes the first draft, and Taylor reviews it and edits it.\nEditing is a lot easier for him than writing it from scratch.\nThat isn't just automation.\nIt's designed to be an unlock.\n\nSo here's the plan.\nThe score shows how much evidence is behind each part.\nIt's written for people, and it's written for agents.\n\nFor an AI studio, the technology is the easy part.\nThe hard part is everything else.\nLike... can he use real actors?\nWho owns the rights?\nEvery claim links to its evidence, and one click opens the actual source, right at the passage.\n\nRemember that competitor move? We see that it changes the go-to-market strategy, flag the section, and propose the update.\n\nNothing changes until a real person approves it. Now it's version three.\n\nPeople read the document. Agents read the workflow underneath it, which we call a dag.\nIt's a visual way to lay out how information flows from the context into the plan, so an agent can follow it.\nEach section is its own node, grounded in its own evidence.\n\nBecause it's built this way, each node can update when something new comes in.\nWhen the market changes, the plan knows exactly what it touches.\nThat's what makes it living. And a lot of plans share the same nodes.\nA marketing campaign has the same target market, user story and pricing as a PRD. That's how we grow into other teams.\n\nCapability 3 | The living roadmap\n\nThe third is the living roadmap.\n\nLegacy project tools organize work around tickets, and tickets are organized around human effort, one human day at a time.\nWho's free? How many hours? And the titles don't tell you much.\nAdd audience tracking, for example. What does that even mean?\n\nWith AI, the unit of work is a Gee task. Every Gee task has a goal and an eval.\nA person can do it or an agent can, someone always owns it, and it's held to the same standard either way.\n\nHere's what that ticket should have said.\nFor every viewer in a test screening, how much of the pilot did they watch, and where did they drop off?\nThe agent does the work, and the eval checks it.\nCompletion for every viewer, drop-off within two seconds of the player log, and a report that matches a hand count.\nAnd you can see what this work cost, and even what the whole plan costs.\n\nOgee/loop maps the context to the plan, and it maps the plan to the roadmap the same way.\nThe work can move fast, but right now the roadmap is waiting on one call.\nWhat should the pricing be?\nWe show who owns that call, and everything it's holding up.\n\nCapability 4 | Decisions\n\nThe fourth is decisions. One thing we've all learned is that product only moves as fast as its slowest decision.\n\nThe pricing call lands on Taylor's home page.\nHe's got three options.\nCharge fifty million dollars for one movie.\nCome in low and set a disruptive anchor.\nOr sell ten movies for the price of one.\n\nTaylor can delegate it. So he hands it to Maya, his business lead, and he's clear about her authority.\nShe can decide pricing for the US.\nAnything beyond that comes back to him.\n\nMaya asks finance if ten movies for fifty million holds margin.\nShe asks legal if she can sell them worldwide.\nLegal says the US is cleared, but Europe and the UK need a likeness addendum.\nSo the recommendation becomes US first.\nThen a buyer asks for worldwide rights.\nThat's outside Maya's authority,\nso it goes back to Taylor.\n\nAnd all of that work happened before it ever got to Taylor. No meetings.\nAlong the way, we capture who weighed in, how the recommendation changed, and why it came back to him.\nWe record how this decision actually moved, instead of forcing every project through the same approval chain.\n\nSo Taylor doesn't get a pile of documents.\nHe gets a brief.\nWho weighed in, why the recommendation changed, and why it needs him now.\n\nEvery meeting is one click away.\nHe can watch it, listen to it, or jump to the analysis, and ask a follow-up or send a question to someone on the team.\n\nWhat's left is a real judgment call.\nTaylor approves the ten-pack for the US.\nAnd sends Europe and the UK to Dana with the addendum.\nAnd the work that was waiting starts moving again.\n\nSome questions need an expert.\nShould Taylor build his own studio, or just rent Runway? We have the research on the platforms, but research can't answer that for his project.\n\nSo it goes to John, an advisor to the studio.\nJohn sees the whole picture: the plan, the research and the open decisions.\nAll six questions go as one request, because it's too hard to schedule a meeting with everyone, every time the team needs thirty minutes of an advisor's time.\nThis workflow came straight out of working with our design partners.\nWe're running these expert Q&As with them right now, and we're bringing that marketplace of experts into the product.\n\nJohn records his answers on his phone, at his convenience.\n\nTaylor reviews them and publishes.\nNow John's answers are a first-party source.\nThey flow into the Context Hub, so the plan and every question after this one draw on them.\n\nLater, Sam, who runs production, asks the same question and gets John's answer, with his reasoning.\n\nJohn's advice is only advice.\nSam still owns this decision, and he makes the call.\nRent for version one, and revisit at twenty titles a year.\n\nHere's how the team is making decisions.\nTime to decision and time to unblock are about speed.\nDecision churn is the check on that.\nIt tells you if the team is moving too fast.\nSo it helps balance moving fast, without the churn.\n\nWe also keep a blockers board.\n\"Pending you\" shows Taylor exactly where he's the one holding things up.\n\nHe can switch to the team view.\n\"For the project\" shows everything holding up progress, whoever owns the next step.\nTaylor delegated the Europe addendum, so it left his queue, but it's still on the project.\nThe metrics show how decisions are going.\nThe blockers board shows what needs to happen now.\n\nMost companies have never tried to record how decisions get made, because decisions are an infinite space problem.\n[pause]\nWe can do it because we bound it by the plan, with its goals, its evidence and its people.\nSo we can show what's known, what's still open, and who needs to act.\n\nClose\n\nAI is shifting how we organize work, from human effort to human judgment.\nThese four capabilities work together, bounded by the plan, so the team can focus on building the right thing, with real confidence.\n\nAI has transformed engineering.\nOgee/loop codifies human orchestration and turns it into infrastructure, so product teams can scale.";
+  const TSYNC = {"words":["opening","ai","has","transformed","engineering","now","the","bottleneck","is","product","management","product","managers","orchestrate","everything","from","idea","to","impact","and","they","do","it","mostly","by","hand","agents","keep","adding","more","work","to","that","process","and","product","managers","need","help","thats","where","ogeeloop","comes","in","we","orchestrate","the","work","across","people","and","agents","so","product","teams","can","scale","well","walk","through","four","capabilities","lets","hold","questions","until","the","end","so","you","can","see","how","it","all","connects","this","is","taylor","chien","taylor","is","a","real","person","and","this","is","his","real","idea","the","company","is","fictional","hes","the","founder","and","ceo","and","right","now","hes","also","the","head","of","product","with","a","small","team","helping","him","out","today","they","make","short","ai","videos","his","idea","is","to","make","full","ai","movies","for","streamers","so","he","asks","a","general","ai","tool","about","his","business","idea","the","ai","tool","tells","him","its","brilliant","and","thats","the","problem","you","get","an","answer","but","you","dont","know","if","its","right","the","ai","tool","doesnt","follow","up","and","it","doesnt","continuously","research","the","answers","you","need","capability","1","continuous","intelligence","thats","one","of","the","problems","ogeeloop","solves","we","call","it","continuous","intelligence","taylor","asks","ogee","the","same","question","is","my","business","idea","a","good","one","ogeeloop","starts","researching","the","questions","that","matter","to","his","business","who","buys","what","they","need","and","who","hes","up","against","all","of","it","goes","into","the","context","hub","when","the","research","is","done","taylor","can","keep","it","alive","we","keep","looking","for","new","sources","so","the","research","stays","current","the","research","is","in","taylors","not","from","the","movie","business","so","this","is","the","first","time","hes","seeing","who","actually","buys","which","segments","they","belong","to","the","jobs","they","need","done","and","roughly","what","theyd","pay","to","get","them","done","and","he","finds","out","several","companies","are","already","going","after","this","idea","from","there","ogeeloop","suggests","product","ideas","that","might","be","worth","pursuing","now","anyone","on","his","team","can","ask","questions","of","the","same","research","every","answer","tells","you","whether","its","sourced","inferred","or","a","hypothesis","so","you","know","how","much","weight","to","put","on","it","heres","one","taylor","didnt","know","a","failed","pilot","can","cost","ten","to","fourteen","million","dollars","and","only","about","a","quarter","of","pilots","get","picked","up","doing","the","math","and","a","hit","series","is","worth","forty","to","fiftysix","million","dollars","to","a","studio","hes","new","to","the","business","and","now","he","has","a","pricing","anchor","and","we","keep","looking","a","competitor","makes","a","move","a","buyer","changes","how","they","commission","new","research","comes","out","each","one","lands","in","the","right","place","in","the","context","hub","every","update","comes","in","like","a","code","checkin","developers","keep","their","code","clean","this","way","and","now","the","context","gets","the","same","care","its","versioned","and","someone","on","the","team","accepts","it","before","anything","changes","capability","2","the","living","plan","the","second","capability","is","the","living","plan","now","taylor","can","build","his","plan","maybe","he","already","has","something","in","mind","as","he","sets","it","up","ogeeloop","pulls","in","what","it","already","knows","the","goal","the","opportunity","and","the","product","or","he","can","start","from","an","opportunity","we","found","in","the","research","this","one","already","has","evidence","behind","it","ogeeloop","writes","the","first","draft","and","taylor","reviews","it","and","edits","it","editing","is","a","lot","easier","for","him","than","writing","it","from","scratch","that","isnt","just","automation","its","designed","to","be","an","unlock","so","heres","the","plan","the","score","shows","how","much","evidence","is","behind","each","part","its","written","for","people","and","its","written","for","agents","for","an","ai","studio","the","technology","is","the","easy","part","the","hard","part","is","everything","else","like","can","he","use","real","actors","who","owns","the","rights","every","claim","links","to","its","evidence","and","one","click","opens","the","actual","source","right","at","the","passage","remember","that","competitor","move","we","see","that","it","changes","the","gotomarket","strategy","flag","the","section","and","propose","the","update","nothing","changes","until","a","real","person","approves","it","now","its","version","three","people","read","the","document","agents","read","the","workflow","underneath","it","which","we","call","a","dag","its","a","visual","way","to","lay","out","how","information","flows","from","the","context","into","the","plan","so","an","agent","can","follow","it","each","section","is","its","own","node","grounded","in","its","own","evidence","because","its","built","this","way","each","node","can","update","when","something","new","comes","in","when","the","market","changes","the","plan","knows","exactly","what","it","touches","thats","what","makes","it","living","and","a","lot","of","plans","share","the","same","nodes","a","marketing","campaign","has","the","same","target","market","user","story","and","pricing","as","a","prd","thats","how","we","grow","into","other","teams","capability","3","the","living","roadmap","the","third","is","the","living","roadmap","legacy","project","tools","organize","work","around","tickets","and","tickets","are","organized","around","human","effort","one","human","day","at","a","time","whos","free","how","many","hours","and","the","titles","dont","tell","you","much","add","audience","tracking","for","example","what","does","that","even","mean","with","ai","the","unit","of","work","is","a","gee","task","every","gee","task","has","a","goal","and","an","eval","a","person","can","do","it","or","an","agent","can","someone","always","owns","it","and","its","held","to","the","same","standard","either","way","heres","what","that","ticket","should","have","said","for","every","viewer","in","a","test","screening","how","much","of","the","pilot","did","they","watch","and","where","did","they","drop","off","the","agent","does","the","work","and","the","eval","checks","it","completion","for","every","viewer","dropoff","within","two","seconds","of","the","player","log","and","a","report","that","matches","a","hand","count","and","you","can","see","what","this","work","cost","and","even","what","the","whole","plan","costs","ogeeloop","maps","the","context","to","the","plan","and","it","maps","the","plan","to","the","roadmap","the","same","way","the","work","can","move","fast","but","right","now","the","roadmap","is","waiting","on","one","call","what","should","the","pricing","be","we","show","who","owns","that","call","and","everything","its","holding","up","capability","4","decisions","the","fourth","is","decisions","one","thing","weve","all","learned","is","that","product","only","moves","as","fast","as","its","slowest","decision","the","pricing","call","lands","on","taylors","home","page","hes","got","three","options","charge","fifty","million","dollars","for","one","movie","come","in","low","and","set","a","disruptive","anchor","or","sell","ten","movies","for","the","price","of","one","taylor","can","delegate","it","so","he","hands","it","to","maya","his","business","lead","and","hes","clear","about","her","authority","she","can","decide","pricing","for","the","us","anything","beyond","that","comes","back","to","him","maya","asks","finance","if","ten","movies","for","fifty","million","holds","margin","she","asks","legal","if","she","can","sell","them","worldwide","legal","says","the","us","is","cleared","but","europe","and","the","uk","need","a","likeness","addendum","so","the","recommendation","becomes","us","first","then","a","buyer","asks","for","worldwide","rights","thats","outside","mayas","authority","so","it","goes","back","to","taylor","and","all","of","that","work","happened","before","it","ever","got","to","taylor","no","meetings","along","the","way","we","capture","who","weighed","in","how","the","recommendation","changed","and","why","it","came","back","to","him","we","record","how","this","decision","actually","moved","instead","of","forcing","every","project","through","the","same","approval","chain","so","taylor","doesnt","get","a","pile","of","documents","he","gets","a","brief","who","weighed","in","why","the","recommendation","changed","and","why","it","needs","him","now","every","meeting","is","one","click","away","he","can","watch","it","listen","to","it","or","jump","to","the","analysis","and","ask","a","followup","or","send","a","question","to","someone","on","the","team","whats","left","is","a","real","judgment","call","taylor","approves","the","tenpack","for","the","us","and","sends","europe","and","the","uk","to","dana","with","the","addendum","and","the","work","that","was","waiting","starts","moving","again","some","questions","need","an","expert","should","taylor","build","his","own","studio","or","just","rent","runway","we","have","the","research","on","the","platforms","but","research","cant","answer","that","for","his","project","so","it","goes","to","john","an","advisor","to","the","studio","john","sees","the","whole","picture","the","plan","the","research","and","the","open","decisions","all","six","questions","go","as","one","request","because","its","too","hard","to","schedule","a","meeting","with","everyone","every","time","the","team","needs","thirty","minutes","of","an","advisors","time","this","workflow","came","straight","out","of","working","with","our","design","partners","were","running","these","expert","qas","with","them","right","now","and","were","bringing","that","marketplace","of","experts","into","the","product","john","records","his","answers","on","his","phone","at","his","convenience","taylor","reviews","them","and","publishes","now","johns","answers","are","a","firstparty","source","they","flow","into","the","context","hub","so","the","plan","and","every","question","after","this","one","draw","on","them","later","sam","who","runs","production","asks","the","same","question","and","gets","johns","answer","with","his","reasoning","johns","advice","is","only","advice","sam","still","owns","this","decision","and","he","makes","the","call","rent","for","version","one","and","revisit","at","twenty","titles","a","year","heres","how","the","team","is","making","decisions","time","to","decision","and","time","to","unblock","are","about","speed","decision","churn","is","the","check","on","that","it","tells","you","if","the","team","is","moving","too","fast","so","it","helps","balance","moving","fast","without","the","churn","we","also","keep","a","blockers","board","pending","you","shows","taylor","exactly","where","hes","the","one","holding","things","up","he","can","switch","to","the","team","view","for","the","project","shows","everything","holding","up","progress","whoever","owns","the","next","step","taylor","delegated","the","europe","addendum","so","it","left","his","queue","but","its","still","on","the","project","the","metrics","show","how","decisions","are","going","the","blockers","board","shows","what","needs","to","happen","now","most","companies","have","never","tried","to","record","how","decisions","get","made","because","decisions","are","an","infinite","space","problem","pause","we","can","do","it","because","we","bound","it","by","the","plan","with","its","goals","its","evidence","and","its","people","so","we","can","show","whats","known","whats","still","open","and","who","needs","to","act","close","ai","is","shifting","how","we","organize","work","from","human","effort","to","human","judgment","these","four","capabilities","work","together","bounded","by","the","plan","so","the","team","can","focus","on","building","the","right","thing","with","real","confidence","ai","has","transformed","engineering","ogeeloop","codifies","human","orchestration","and","turns","it","into","infrastructure","so","product","teams","can","scale"],"t":[2.68,2.68,3.14,3.6,4.06,4.52,4.98,5.44,5.9,6.36,6.82,7.58,8.04,8.5,8.97,9.43,9.89,10.36,10.82,11.58,11.85,12.12,12.39,12.67,12.94,13.21,13.78,14.11,14.44,14.77,15.09,15.42,15.75,16.08,16.41,16.74,17.06,17.39,17.72,20.25,20.57,21.06,21.55,21.87,22.5,22.84,23.18,23.52,23.86,24.2,24.54,24.88,25.22,25.56,25.9,26.24,26.58,27.88,28.28,28.68,29.08,29.48,30.18,30.41,30.65,30.88,31.11,31.35,31.58,31.81,32.05,32.28,32.52,32.75,32.98,33.22,34.25,34.56,34.87,35.19,35.5,35.82,36.14,36.49,36.83,37.18,37.52,37.87,38.21,38.56,38.9,39.55,39.91,40.27,40.63,41.3,41.58,41.87,42.15,42.44,42.73,43.01,43.3,43.58,43.87,44.15,44.44,44.73,45.01,45.3,45.58,45.87,46.15,46.44,46.73,47.01,47.6,47.99,48.38,48.77,49.16,49.55,50.25,50.55,50.85,51.15,51.45,51.76,52.06,52.36,52.66,52.96,54.05,54.37,54.7,55.03,55.36,55.68,56.01,56.34,56.66,56.99,57.32,57.95,58.26,58.58,58.9,59.22,59.54,59.86,60.17,60.49,60.81,61.13,61.75,62.0,62.26,62.51,62.76,63.02,63.27,63.53,63.78,64.04,64.29,64.85,65.18,65.52,65.86,66.2,66.54,66.87,67.21,67.55,67.89,68.23,68.56,68.9,69.24,69.58,69.92,70.26,70.6,70.94,71.28,71.59,71.89,72.2,72.5,72.96,73.42,74.03,74.37,74.72,75.06,75.41,76.85,77.21,77.58,77.95,78.31,78.68,79.35,79.6,79.85,80.11,80.36,80.61,80.86,82.16,83.45,83.82,84.19,84.55,84.92,85.29,85.66,86.03,86.4,87.06,87.49,88.21,88.54,88.86,89.19,89.51,89.84,90.16,90.49,91.11,91.32,91.53,91.74,91.95,92.16,92.37,92.57,93.58,93.94,94.3,94.66,95.02,95.38,95.74,96.1,96.46,96.82,97.48,97.82,98.17,98.51,98.85,99.19,99.54,99.88,100.22,100.56,100.91,102.01,102.41,102.81,103.21,103.91,104.2,104.49,104.78,105.07,105.36,105.65,105.94,106.23,106.52,106.81,107.1,107.39,107.68,107.97,108.25,108.54,109.58,109.95,110.33,110.7,111.08,112.21,112.58,112.95,113.32,113.69,114.36,114.59,114.82,115.05,115.28,115.51,115.74,115.97,116.2,117.21,117.52,117.83,118.14,118.45,118.76,119.07,119.38,119.69,120.0,120.31,120.62,121.71,122.06,122.52,122.97,123.43,123.77,124.12,124.46,124.8,125.15,125.49,131.65,131.99,132.33,132.67,133.01,133.36,133.7,134.04,134.38,134.72,135.06,135.41,136.05,136.38,136.7,137.03,137.36,137.69,138.02,138.65,139.25,139.85,140.45,141.35,141.55,141.75,141.95,142.15,142.36,142.56,142.76,142.96,143.16,144.48,144.88,145.28,145.68,146.08,146.78,147.12,147.46,147.79,148.13,148.47,148.81,149.14,149.48,149.82,150.16,150.49,150.83,151.17,151.5,151.84,152.18,152.52,152.85,153.19,153.83,154.16,154.5,155.01,155.53,155.92,156.32,156.71,157.11,157.5,157.9,158.3,158.7,158.89,159.09,159.49,159.88,160.58,160.81,161.03,161.26,161.49,161.71,161.94,162.17,162.39,162.62,162.85,163.07,164.08,164.43,164.78,165.13,165.78,166.15,166.52,166.89,167.26,167.93,168.31,168.7,169.08,169.46,169.85,170.53,170.94,171.36,171.77,172.48,172.73,172.97,173.22,173.47,173.72,173.96,174.21,174.46,174.71,174.95,176.78,177.12,177.47,177.81,178.16,178.5,178.85,179.51,180.18,180.53,180.87,181.22,181.57,181.91,182.26,182.61,182.95,183.3,183.65,183.99,184.34,184.69,185.03,185.68,186.04,186.41,186.77,187.14,187.5,187.86,188.23,188.59,188.96,189.32,189.69,189.98,190.26,190.55,190.84,191.12,191.41,191.74,192.08,192.41,192.74,193.07,193.4,194.51,194.82,195.13,195.44,195.75,196.06,196.66,197.0,197.33,197.67,198.01,198.34,198.68,199.31,199.63,199.94,200.25,200.57,201.04,201.51,201.82,202.13,202.45,202.76,203.08,203.39,203.7,204.02,204.33,204.64,204.96,205.27,208.51,208.83,209.15,209.46,209.78,210.1,210.41,210.73,211.05,211.36,211.68,212.0,212.61,212.9,213.19,213.48,213.77,214.06,214.34,215.24,216.13,216.47,216.82,217.16,217.5,217.84,218.19,218.53,218.87,219.21,219.55,220.2,220.48,220.77,221.06,221.35,221.63,221.92,222.21,222.5,222.78,223.07,223.36,223.95,224.35,224.75,225.15,225.85,226.12,226.39,226.66,226.93,227.2,228.25,228.68,229.12,229.56,230.3,230.62,230.95,231.27,231.6,231.92,232.25,232.57,232.9,233.22,233.85,234.18,234.52,234.85,235.19,235.52,235.86,236.2,236.53,237.65,237.99,238.34,238.68,239.03,239.37,239.72,240.06,240.41,240.75,241.4,241.73,242.06,242.4,242.73,243.06,243.7,244.16,244.61,245.07,245.53,245.99,246.75,247.18,247.62,248.06,248.8,249.12,249.44,249.76,250.08,250.41,250.73,251.05,251.37,251.69,252.01,252.34,252.66,252.98,253.3,253.62,253.94,255.05,255.53,256.02,256.51,257.3,257.6,257.9,258.2,258.5,258.8,259.4,260.0,260.6,260.92,261.25,261.57,261.89,262.22,262.54,264.41,264.78,265.14,265.5,265.86,266.23,266.59,266.95,267.61,267.89,268.17,268.84,269.51,269.93,270.34,270.75,271.46,271.8,272.15,272.49,272.83,273.17,273.51,273.85,274.19,274.53,274.87,275.51,275.84,276.17,276.5,276.82,277.15,277.48,277.8,278.13,278.46,278.79,279.11,279.44,279.77,280.1,280.42,280.75,281.08,281.4,281.73,282.06,282.39,283.01,283.33,283.64,283.96,284.28,284.59,284.91,285.22,285.54,285.85,286.17,287.18,287.54,287.89,288.25,288.61,288.97,289.32,289.68,290.04,290.39,290.75,291.11,291.47,291.82,292.48,292.81,293.13,293.46,293.79,294.11,294.44,294.77,295.09,295.42,295.74,296.07,296.4,296.72,297.05,297.38,298.33,298.61,298.89,299.17,299.45,299.73,300.01,300.29,300.72,301.15,301.56,301.97,302.38,302.79,303.2,303.61,304.02,304.43,304.84,305.25,305.66,306.07,306.48,306.89,307.6,307.85,308.11,308.36,308.61,308.86,309.12,309.39,309.66,309.94,310.21,310.48,310.75,310.97,311.2,311.42,311.64,312.38,313.11,313.5,313.89,314.27,314.66,315.05,315.43,315.82,316.21,316.59,316.98,317.37,317.76,318.14,318.53,318.73,318.92,319.3,319.69,320.08,320.76,321.24,322.01,322.35,322.68,323.02,323.35,323.69,324.02,324.36,324.69,325.03,325.66,325.99,326.32,326.64,326.97,327.3,327.63,327.95,328.28,328.61,329.75,330.08,330.41,330.75,331.08,331.41,331.75,332.08,332.4,332.73,333.05,333.29,333.54,333.78,334.15,334.52,334.89,335.26,335.63,336.3,336.61,336.92,337.23,337.54,337.85,338.16,338.47,338.79,339.4,339.71,340.02,340.34,340.65,340.96,341.28,341.59,341.9,342.21,342.53,342.84,343.15,345.01,345.31,345.6,345.89,346.18,346.48,346.77,347.36,347.68,347.99,348.31,348.62,348.93,349.25,349.86,350.12,350.38,350.65,350.91,351.17,351.43,351.69,351.95,352.21,352.47,352.73,352.99,353.25,353.81,354.14,354.46,354.79,355.11,355.44,355.76,356.09,356.41,356.74,357.36,357.74,358.12,358.49,359.06,359.62,360.0,360.37,360.75,361.13,361.5,361.88,362.25,362.63,363.01,363.38,363.76,364.13,364.51,364.89,365.56,365.83,366.11,366.38,366.65,366.92,367.19,367.46,367.73,368.01,368.28,368.55,368.82,369.09,369.36,370.19,371.03,371.34,371.64,371.95,372.26,372.57,372.87,373.18,373.49,373.8,374.1,374.41,374.72,375.18,375.64,375.95,376.26,376.86,377.14,377.41,377.69,377.96,378.24,378.51,378.79,379.06,379.48,379.89,380.16,380.44,380.71,380.99,381.56,381.94,382.32,382.7,383.08,383.76,384.02,384.29,384.55,384.81,385.07,385.33,385.59,385.85,386.11,386.37,386.77,387.18,387.58,387.98,388.49,389.0,389.52,390.33,390.62,390.9,391.19,391.47,391.76,392.04,392.33,392.61,392.9,393.19,393.47,393.76,394.04,394.33,394.61,395.68,396.06,396.44,396.82,397.19,397.57,397.92,398.28,398.63,399.06,399.48,399.91,400.63,401.12,401.61,401.86,402.11,402.6,403.09,403.47,403.84,404.22,404.57,404.91,405.25,405.59,405.94,406.58,406.8,407.02,407.25,407.48,407.7,407.93,408.15,408.71,409.28,409.58,409.89,410.19,410.5,410.8,411.11,411.41,412.02,412.33,412.63,412.94,413.25,413.55,413.86,414.16,414.46,414.77,415.07,415.68,415.99,416.29,416.6,416.91,417.22,417.52,418.13,418.43,418.72,419.02,419.31,419.61,419.9,420.98,421.38,421.77,422.17,422.56,422.96,423.35,423.75,424.14,424.54,424.93,425.63,425.94,426.25,426.56,426.87,427.19,427.5,427.81,428.12,428.73,429.06,429.39,429.72,430.05,430.38,430.71,431.04,431.37,431.7,432.03,432.36,432.69,433.02,433.35,433.98,434.44,434.9,435.35,435.81,436.27,437.03,437.39,437.74,438.1,438.46,438.82,439.17,439.83,440.14,440.44,440.75,441.06,441.36,441.67,441.98,442.29,442.59,444.31,444.58,444.84,445.1,445.36,445.63,445.89,446.15,446.41,446.68,446.94,447.2,447.76,448.54,449.61,449.96,450.31,450.66,451.01,451.36,451.71,452.06,452.41,452.76,453.11,453.46,453.81,454.16,454.51,454.86,455.21,455.56,456.06,456.56,456.93,457.3,457.67,458.04,458.41,458.78,459.15,459.51,459.88,460.25,460.62,460.99,461.36,461.73,462.1,462.46,463.61,463.93,464.24,464.55,464.86,465.18,465.49,465.8,466.11,466.43,466.74,467.05,467.66,468.01,468.36,469.01,469.34,469.66,469.98,470.3,470.62,470.95,471.27,471.59,471.91,473.78,474.14,474.5,474.86,475.21,475.57,476.23,476.53,476.83,477.13,477.43,477.73,478.03,478.34,478.64,478.94,479.24,479.54,479.84,480.14,480.44,480.74,480.97,481.19,481.41,481.64,481.95,482.25,482.55,482.85,483.15,485.61,486.03,486.46,486.88,487.3,487.72,488.14,488.86,489.27,489.67,490.08,490.49,490.9,491.3,491.71,491.97,492.24,492.5,492.76,493.02,493.28,493.54,493.8,494.06,494.32,495.38,495.62,495.86,496.1,496.34,496.59,496.83,497.07,497.31,503.48,503.86,504.24,504.62,505.0,505.68,506.06,506.44,506.82,507.2,507.58,507.96,508.34,508.72,509.1,509.78,510.06,510.34,510.61,510.89,511.17,511.45,511.73,512.0,512.28,512.56,512.84,513.12,513.39,513.67,515.61,515.95,516.29,516.63,516.97,517.31,517.65,517.99,518.33,518.67,519.31,519.71,520.11,520.5,520.9,521.29,521.69,522.09,522.48,522.88,523.27,523.67,524.07,524.76,525.1,525.43,525.76,526.09,526.42,526.76,527.09,527.42,527.75,528.08,528.42,528.75,529.08,529.41,529.75,530.08,530.41,530.74,531.07,531.41,531.74,532.07,532.4,532.73,533.07,533.4,533.73,534.36,534.7,535.03,535.36,535.69,536.02,536.35,536.69,537.02,537.35,537.83,538.31,538.64,538.96,539.28,539.6,539.92,540.25,540.57,540.89,541.21,541.53,541.86,542.18,542.5,542.82,543.14,543.47,543.79,544.11,545.21,545.51,545.81,546.1,546.4,546.7,547.0,547.29,547.59,547.89,549.31,549.72,550.13,550.64,551.15,551.66,552.05,552.44,552.83,553.35,553.86,554.38,555.06,555.36,555.66,555.96,556.26,556.55,556.85,557.15,557.45,557.75,558.05,558.34,558.64,558.94,559.24,559.54,559.84,560.13,564.18,564.54,564.9,565.25,565.61,565.97,566.33,566.68,567.04,567.4,567.75,568.11,568.47,568.83,569.18,569.54,570.71,571.1,571.48,571.86,572.25,572.63,573.01,573.4,573.78,574.16,574.55,574.93,575.31,575.7,576.08,576.76,577.1,577.44,577.78,578.12,578.45,578.79,579.13,579.47,579.81,580.15,581.28,581.61,581.94,582.27,582.59,582.92,583.25,583.88,584.24,584.6,584.96,585.32,585.68,586.04,586.4,586.76,587.12,587.78,588.12,588.47,588.81,589.15,589.49,589.84,590.48,590.75,591.02,591.29,591.56,591.83,592.1,592.37,592.64,592.91,593.48,593.8,594.12,594.44,594.76,595.07,595.39,595.71,596.03,597.15,597.46,597.78,598.1,598.41,598.73,599.35,599.66,599.97,600.28,600.59,600.9,601.21,601.52,601.83,602.14,602.45,602.76,604.51,604.78,605.06,605.33,605.6,605.87,606.14,606.71,607.08,607.45,607.83,608.2,608.57,608.94,609.31,609.68,610.05,610.42,610.79,611.16,611.83,612.21,612.58,612.96,613.33,613.71,614.09,614.46,614.83,615.21,615.58,615.96,616.33,616.71,617.08,617.46,618.13,618.5,618.88,619.25,619.62,619.99,620.36,621.03,621.31,621.58,621.86,622.13,622.41,622.68,622.95,623.23,624.48,624.96,625.43,625.9,626.38,626.86,627.33,627.8,628.28,628.75,629.23,629.71,630.18,630.65,631.13,631.61,632.08,632.55,632.94,633.33,633.68,634.02,634.37,634.72,635.07,635.41,635.76,636.11,636.46,636.8,637.15,637.5,637.85,638.19,638.54,638.89,639.24,639.58,640.23,640.53,640.84,641.14,641.45,641.75,642.06,642.36,642.67,642.97,643.28,643.58,643.89,644.19,644.87,645.55,645.94,646.34,646.74,647.13,647.53,647.92,648.32,648.72,649.11,649.51,649.9,650.3,651.0,651.34,651.68,652.03,652.37,652.72,653.06,653.41,653.75,654.09,654.44,654.78,655.13,655.47,655.81,656.16,656.5,656.85,657.19,657.53,657.88,658.22,659.85,660.33,660.81,661.29,663.39,665.49,665.95,666.4,666.86,667.31,667.76,668.22,668.67,669.43,669.7,669.98,670.25,670.53]};
+  const defaults = { script:DEMO, mode: SR ? "voice" : "auto", speed:50, font:64, width:80, line:30, mirror:false };
+  let S = { ...defaults };
+  try { Object.assign(S, JSON.parse(localStorage.getItem("prompter.sync.v1") || "{}")); } catch(e){}
+  if (!SR) S.mode = "auto";
+  const save = () => { try { localStorage.setItem("prompter.sync.v1", JSON.stringify(S)); } catch(e){} };
+
+  /* ---------- Setup view ---------- */
+  const ta = $("script");
+  ta.value = S.script;
+
+  function updateMeta(){
+    const n = (ta.value.trim().match(/\S+/g) || []).length;
+    $("count").textContent = n === 1 ? "1 word" : n.toLocaleString() + " words";
+    const mins = n / 140;
+    $("duration").textContent = n ? (mins < 1 ? "under a minute" : "about " + Math.round(mins) + " min") + " at a speaking pace" : "";
+    $("start").disabled = n === 0;
+  }
+  ta.addEventListener("input", () => { S.script = ta.value; save(); updateMeta(); });
+
+  const sliders = { font:"px", width:"%", line:"%", speed:"" };
+  for (const k in sliders){
+    const el = $(k);
+    el.value = S[k];
+    const show = () => $(k+"Val").textContent = k === "speed" ? speedLabel(S.speed) : S[k] + sliders[k];
+    el.addEventListener("input", () => { S[k] = +el.value; save(); show(); applyLayout(); });
+    show();
+  }
+  function speedLabel(v){ return v < 35 ? "Slow" : v < 80 ? "Medium" : v < 130 ? "Fast" : "Very fast"; }
+
+  $("mirror").checked = S.mirror;
+  $("mirror").addEventListener("change", e => { S.mirror = e.target.checked; save(); applyLayout(); });
+
+  function setMode(m){
+    S.mode = m; save();
+    $("modeVoice").setAttribute("aria-pressed", m === "voice");
+    $("modeAuto").setAttribute("aria-pressed", m === "auto");
+    $("speedField").classList.toggle("hidden", m === "voice");
+  }
+  $("modeVoice").onclick = () => setMode("voice");
+  $("modeAuto").onclick = () => setMode("auto");
+  if (!SR){
+    $("modeVoice").disabled = true;
+    $("voiceNote").textContent = "Voice follow needs Chrome, Edge or Safari. Steady speed works everywhere.";
+    $("voiceNote").classList.add("err");
+  }
+  setMode(S.mode);
+  updateMeta();
+
+  /* ---------- Build the prompter text ---------- */
+  const content = $("content"), stage = $("stage");
+  let words = [];      // normalized words
+  let spans = [];      // matching span elements
+  let cur = 0;         // index of the next word to read
+
+  const norm = w => w.toLowerCase().replace(/[’'`]/g, "").replace(/[^\p{L}\p{N}]+/gu, "");
+
+  function build(){
+    content.innerHTML = "";
+    words = []; spans = [];
+    const paras = S.script.replace(/\r/g, "").split(/\n\s*\n|\n/);
+    for (const para of paras){
+      if (!para.trim()) continue;
+      const p = document.createElement("p");
+      const tokens = para.trim().split(/\s+/);
+      tokens.forEach((t, i) => {
+        const n = norm(t);
+        if (!n){ p.append(t + " "); return; }   // pure punctuation like "—"
+        const s = document.createElement("span");
+        s.className = "w";
+        s.textContent = t;
+        s.dataset.i = spans.length;
+        p.append(s);
+        if (i < tokens.length - 1) p.append(" ");
+        spans.push(s); words.push(n);
+      });
+      content.append(p);
+    }
+    cur = 0; paint(0);
+    alignTimes();
+  }
+
+  /* ---------- Video sync ---------- */
+  let wtime = [];           // video time (s) for each script word
+  function alignTimes(){
+    const A = words, B = TSYNC.words, n = A.length, m = B.length;
+    // longest common subsequence over normalized words
+    const W = m + 1, L = new Uint16Array((n + 1) * W);
+    for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--)
+      L[i*W+j] = A[i] === B[j] ? L[(i+1)*W+j+1] + 1 : Math.max(L[(i+1)*W+j], L[i*W+j+1]);
+    wtime = new Array(n).fill(null);
+    let i = 0, j = 0;
+    while (i < n && j < m){
+      if (A[i] === B[j]){ wtime[i] = TSYNC.t[j]; i++; j++; }
+      else if (L[(i+1)*W+j] >= L[i*W+j+1]) i++; else j++;
+    }
+    let last = null;
+    for (let k = 0; k < n; k++){ if (wtime[k] === null) wtime[k] = last; else last = wtime[k]; }
+    let next = null;
+    for (let k = n - 1; k >= 0; k--){ if (wtime[k] === null) wtime[k] = next ?? 0; else next = wtime[k]; }
+  }
+  let vwin = null, vurl = null, vword = -1;
+  const vid = () => { try { return vwin && !vwin.closed ? vwin.document.getElementById("v") : null; } catch(e){ return null; } };
+  $("vpick").addEventListener("change", e => {
+    const f = e.target.files[0]; if (!f) return;
+    if (vurl) URL.revokeObjectURL(vurl);
+    vurl = URL.createObjectURL(f); $("vname").textContent = f.name;
+    const v = vid(); if (v) v.src = vurl;
+  });
+  function openVideo(){
+    if (!vurl){ status("Choose the video file in Edit first.", true); return; }
+    if (vwin && !vwin.closed){ vwin.focus(); return; }
+    vwin = window.open("", "prompter-video", "width=1280,height=760");
+    if (!vwin){ status("Allow pop-ups for this page to open the video.", true); return; }
+    vwin.document.write(`<!doctype html><title>Demo video</title><style>html,body{margin:0;height:100%;background:#000}video{width:100%;height:100%;object-fit:contain;display:block}</style><video id="v" muted playsinline></video><script>addEventListener("keydown",e=>{const v=document.getElementById("v");if(e.key===" "){e.preventDefault();v.paused?v.play():v.pause()}if(e.key==="f"){document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen()}if(e.key==="m")v.muted=!v.muted});<\/script>`);
+    vwin.document.close();
+    vid().src = vurl;
+  }
+  function playPause(){ const v = vid(); if (!v){ openVideo(); return; } v.paused ? v.play() : v.pause(); }
+  function syncToMe(){ const v = vid(); if (!v || !wtime.length) return; v.currentTime = wtime[Math.min(cur, wtime.length - 1)] || 0; }
+  function seek(d){ const v = vid(); if (v) v.currentTime = Math.max(0, v.currentTime + d); }
+  function videoTick(){
+    const v = vid(), sy = $("sync");
+    if (!v || !wtime.length){ sy.classList.add("hidden"); $("vmark").style.opacity = 0; if (vword >= 0 && spans[vword]) spans[vword].classList.remove("vid"); vword = -1; $("vplay").textContent = "Play video"; return; }
+    $("vplay").textContent = v.paused ? "Play video" : "Pause video";
+    const t = v.currentTime;
+    // last word whose time has passed
+    let lo = 0, hi = wtime.length - 1, k = -1;
+    while (lo <= hi){ const mid = (lo + hi) >> 1; if (wtime[mid] <= t){ k = mid; lo = mid + 1; } else hi = mid - 1; }
+    if (k !== vword){ if (vword >= 0 && spans[vword]) spans[vword].classList.remove("vid"); vword = k; if (k >= 0 && spans[k]) spans[k].classList.add("vid"); }
+    const s = spans[Math.max(0, k)];
+    if (s){ const m = $("vmark"); m.style.opacity = 1; m.style.top = (s.offsetTop - offset) + "px"; m.style.height = s.offsetHeight + "px"; }
+    const mine = wtime[Math.min(cur, wtime.length - 1)] || 0, d = t - mine;
+    sy.classList.remove("hidden", "ok", "ahead", "behind");
+    if (Math.abs(d) < 2){ sy.textContent = v.paused ? "Video paused · in step" : "In step with the video"; sy.classList.add("ok"); }
+    else if (d > 0){ sy.textContent = `Video ${Math.round(d)}s ahead${v.paused ? " · paused" : ""}`; sy.classList.add("ahead"); }
+    else { sy.textContent = `Video ${Math.round(-d)}s behind${v.paused ? " · paused" : ""}`; sy.classList.add("behind"); }
+  }
+
+  content.addEventListener("click", e => {
+    const s = e.target.closest(".w");
+    if (!s) return;
+    setCur(+s.dataset.i);
+    if (S.mode === "auto") offset = targetFor(cur);
+  });
+
+  /* ---------- Layout ---------- */
+  function applyLayout(){
+    content.style.fontSize = S.font + "px";
+    content.style.width = S.width + "%";
+    content.style.paddingTop = (S.line / 100 * innerHeight) + "px";
+    content.style.paddingBottom = innerHeight + "px";
+    stage.classList.toggle("mirror", S.mirror);
+    $("marker").style.top = (S.line / 100 * innerHeight + S.font * 0.69) + "px";
+    $("sizeLabel").textContent = S.font;
+  }
+  addEventListener("resize", applyLayout);
+
+  function targetFor(i){
+    const s = spans[Math.min(i, spans.length - 1)];
+    if (!s) return 0;
+    return s.offsetTop - S.line / 100 * innerHeight;
+  }
+
+  /* ---------- Highlight ---------- */
+  let painted = 0;
+  function paint(n){
+    // words before n are "done"; word n is "now"
+    const lo = Math.min(painted, n), hi = Math.max(painted, n);
+    for (let i = Math.max(0, lo - 1); i <= Math.min(spans.length - 1, hi + 1); i++){
+      spans[i].classList.toggle("done", i < n);
+      spans[i].classList.toggle("now", S.mode === "voice" && i === n);
+    }
+    painted = n;
+  }
+  function setCur(n){
+    n = Math.max(0, Math.min(words.length, n));
+    if (n === cur) return;
+    cur = n; paint(n);
+  }
+
+  /* ---------- Scroll loop ---------- */
+  let offset = 0, running = false, last = performance.now();
+  function frame(t){
+    const dt = Math.min(64, t - last); last = t;
+    if (!$("prompter").classList.contains("hidden")){
+      if (S.mode === "voice"){
+        // ease toward the line that holds the current word; stops when you stop
+        const target = targetFor(cur);
+        offset += (target - offset) * (1 - Math.exp(-dt / 220));
+      } else {
+        if (running) offset += S.speed * 1.2 * dt / 1000 * (S.font / 64);
+        const max = content.scrollHeight - innerHeight;
+        offset = Math.max(0, Math.min(offset, max));
+        // keep highlight roughly in step with the reading line
+        const readY = offset + S.line / 100 * innerHeight;
+        let i = cur;
+        while (i < spans.length - 1 && spans[i].offsetTop + spans[i].offsetHeight * .5 < readY) i++;
+        while (i > 0 && spans[i - 1].offsetTop + spans[i - 1].offsetHeight * .5 >= readY) i--;
+        setCur(i);
+      }
+      content.style.transform = `translate3d(0,${-offset}px,0)`;
+      videoTick();
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  /* ---------- Voice following ---------- */
+  const STOP = new Set("a an the and or but of to in on at for is it its im i you we he she they this that be are was were as with so do my your our".split(" "));
+  function lev(a, b){
+    if (Math.abs(a.length - b.length) > 2) return 3;
+    const m = a.length, n = b.length, d = Array.from({length:m + 1}, (_, i) => [i]);
+    for (let j = 1; j <= n; j++) d[0][j] = j;
+    for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++)
+      d[i][j] = Math.min(d[i-1][j] + 1, d[i][j-1] + 1, d[i-1][j-1] + (a[i-1] === b[j-1] ? 0 : 1));
+    return d[m][n];
+  }
+  function sim(a, b){
+    if (!a || !b) return 0;
+    const w = STOP.has(b) ? .5 : 1;
+    if (a === b) return w;
+    const L = Math.min(a.length, b.length);
+    if (L >= 4 && (a.startsWith(b) || b.startsWith(a))) return .8 * w;
+    if (L >= 4){
+      const d = lev(a, b);
+      if (d <= 1) return .8 * w;
+      if (d <= 2 && L >= 7) return .6 * w;
+    }
+    return 0;
+  }
+
+  // Find where the last few spoken words sit in the script, near the current spot.
+  function locate(spoken){
+    if (!spoken.length) return;
+    const lastW = spoken[spoken.length - 1];
+    const from = Math.max(0, cur - 12), to = Math.min(words.length - 1, cur + 40);
+    let best = -1, bestScore = 0;
+    for (let j = from; j <= to; j++){
+      let s = sim(lastW, words[j]);
+      if (!s) continue;
+      let p = j - 1, chain = 1;
+      for (let k = spoken.length - 2; k >= 0 && p >= 0; k--){
+        let hit = -1, hs = 0;
+        for (let q = p; q >= Math.max(0, p - 2); q--){
+          const v = sim(spoken[k], words[q]);
+          if (v > hs){ hs = v; hit = q; }
+        }
+        if (hit >= 0){ s += hs; p = hit - 1; chain++; }
+      }
+      const ahead = j - cur;
+      s -= Math.max(0, ahead) * 0.025;     // prefer nearby matches
+      if (ahead < -1) s -= 0.6;            // going backwards needs strong evidence
+      if (s > bestScore){ bestScore = s; best = j; }
+    }
+    if (best < 0) return;
+    const ahead = best - cur;
+    const single = words[best].length >= 5 && !STOP.has(words[best]) && ahead >= -1 && ahead <= 4;
+    const ok = ahead < -1 ? bestScore >= 2.6 : (bestScore >= 1.5 || (single && bestScore >= .75));
+    if (ok) setCur(best + 1);
+  }
+
+  let rec = null, listening = false, wantListen = false, restartTimer = null;
+  function startListening(){
+    if (!SR) return;
+    wantListen = true;
+    if (listening) return;
+    rec = new SR();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = navigator.language || "en-US";
+    rec.onstart = () => { listening = true; status(""); updateGo(); };
+    rec.onresult = e => {
+      // Use the words from the newest results only (recent context)
+      let text = "";
+      for (let i = Math.max(0, e.results.length - 3); i < e.results.length; i++) text += " " + e.results[i][0].transcript;
+      const spoken = text.split(/\s+/).map(norm).filter(Boolean).slice(-7);
+      status(spoken.slice(-6).join(" "));
+      locate(spoken);
+    };
+    rec.onerror = e => {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed"){
+        wantListen = false;
+        status("Microphone blocked. Allow it in the address bar, then press Start.", true);
+      } else if (e.error === "audio-capture"){
+        wantListen = false;
+        status("No microphone found.", true);
+      } else if (e.error === "network"){
+        status("Speech service unreachable. Check your connection.", true);
+      }
+    };
+    rec.onend = () => {
+      listening = false;
+      // Chrome ends sessions on its own every so often; quietly restart
+      if (wantListen){ clearTimeout(restartTimer); restartTimer = setTimeout(() => { try { rec.start(); } catch(e){} }, 150); }
+      updateGo();
+    };
+    try { rec.start(); } catch(e){}
+    updateGo();
+  }
+  function stopListening(){
+    wantListen = false;
+    clearTimeout(restartTimer);
+    if (rec){ try { rec.abort(); } catch(e){} }
+    listening = false; updateGo(); status("");
+  }
+
+  let heardTimer;
+  function status(msg, err){
+    const h = $("heard");
+    h.textContent = msg; h.classList.toggle("err", !!err);
+    h.style.opacity = msg ? 1 : 0;
+    clearTimeout(heardTimer);
+    if (msg && !err) heardTimer = setTimeout(() => h.style.opacity = 0, 2500);
+  }
+
+  /* ---------- Controls ---------- */
+  function isOn(){ return S.mode === "voice" ? wantListen : running; }
+  function updateGo(){
+    const on = isOn();
+    $("go").classList.toggle("on", on);
+    $("goLabel").textContent = on ? (S.mode === "voice" ? "Listening" : "Pause") : (S.mode === "voice" ? "Start listening" : "Start");
+  }
+  function toggle(){
+    if (S.mode === "voice"){ wantListen ? stopListening() : startListening(); }
+    else { running = !running; updateGo(); }
+  }
+  $("go").onclick = toggle;
+  $("top").onclick = () => { setCur(0); cur = 0; paint(0); offset = 0; };
+  const resize = d => { S.font = Math.max(24, Math.min(140, S.font + d)); $("font").value = S.font; $("fontVal").textContent = S.font + "px"; save(); applyLayout(); };
+  $("smaller").onclick = () => resize(-4);
+  $("bigger").onclick = () => resize(4);
+  $("vwin").onclick = openVideo;
+  $("vplay").onclick = playPause;
+  $("vsync").onclick = syncToMe;
+  $("mirrorBtn").onclick = () => { S.mirror = !S.mirror; $("mirror").checked = S.mirror; save(); applyLayout(); };
+  $("fs").onclick = () => {
+    try { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); } catch(e){}
+  };
+
+  function open(){
+    $("setup").classList.add("hidden");
+    $("prompter").classList.remove("hidden");
+    build(); applyLayout();
+    offset = 0; running = false; updateGo(); wake();
+    if (S.mode === "voice") startListening();
+  }
+  function close(){
+    stopListening(); running = false;
+    $("prompter").classList.add("hidden");
+    $("setup").classList.remove("hidden");
+    if (document.fullscreenElement) try { document.exitFullscreen(); } catch(e){}
+    ta.focus();
+  }
+  $("start").onclick = open;
+  $("back").onclick = close;
+
+  // Toolbar fades when the mouse is still
+  let idleT;
+  function wake(){
+    $("bar").classList.remove("idle");
+    clearTimeout(idleT);
+    idleT = setTimeout(() => { if (isOn()) $("bar").classList.add("idle"); }, 2500);
+  }
+  ["mousemove", "touchstart"].forEach(ev => $("prompter").addEventListener(ev, wake, {passive:true}));
+
+  addEventListener("keydown", e => {
+    if ($("prompter").classList.contains("hidden")){
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !$("start").disabled) open();
+      return;
+    }
+    const k = e.key;
+    if (k === " "){ e.preventDefault(); toggle(); wake(); }
+    else if (k === "Escape" && !document.fullscreenElement) close();
+    else if (k === "ArrowDown" || k === "ArrowUp"){
+      e.preventDefault();
+      const dir = k === "ArrowDown" ? 1 : -1;
+      if (S.mode === "voice") setCur(cur + dir * 6);
+      else offset += dir * S.font * 1.38;
+    }
+    else if (k === "v" || k === "V") playPause();
+    else if (k === "s" || k === "S") syncToMe();
+    else if (k === "[") seek(-5);
+    else if (k === "]") seek(5);
+    else if (k === "+" || k === "=") resize(4);
+    else if (k === "-" || k === "_") resize(-4);
+  });
+})();
+</script>
+</body>
+</html>
